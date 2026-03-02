@@ -1,105 +1,85 @@
-# ================================
-# IMPORTS
-# ================================
 import streamlit as st
-import cv2
 import numpy as np
-import joblib
-from skimage.feature import hog
+import pickle
+from PIL import Image
 
-# ================================
-# PAGE CONFIG
-# ================================
-st.set_page_config(
-    page_title="Blood Group Prediction",
-    page_icon="🩸",
-    layout="centered"
-)
-
-# ================================
-# LOAD MODELS
-# ================================
+# -----------------------------
+# Load Trained Model
+# -----------------------------
 @st.cache_resource
-def load_models():
-    svm = joblib.load("svm_model.pkl")
-    knn = joblib.load("knn_model.pkl")
-    meta = joblib.load("meta_model.pkl")
-    label_encoder = joblib.load("label_encoder.pkl")
-    return svm, knn, meta, label_encoder
+def load_model():
+    with open("svm_model.pkl", "rb") as file:
+        model = pickle.load(file)
+    return model
 
-svm_model, knn_model, meta_model, label_encoder = load_models()
+svm_model = load_model()
 
-# ================================
-# IMAGE PREPROCESSING
-# ================================
-def preprocess_image(img):
-    img = cv2.resize(img, (128, 128))
-    img = cv2.GaussianBlur(img, (5, 5), 0)
-    img = cv2.createCLAHE(2.0, (8, 8)).apply(img)
-    return img
+# -----------------------------
+# App Title
+# -----------------------------
+st.title("🩸 Blood Group Prediction using Fingerprint")
 
-# ================================
-# HOG FEATURE EXTRACTION
-# ================================
-def extract_features(img):
-    features = hog(
-        img,
-        orientations=9,
-        pixels_per_cell=(8, 8),
-        cells_per_block=(2, 2),
-        block_norm='L2-Hys'
-    )
-    return features.reshape(1, -1)
+st.write("Upload a fingerprint image to predict blood group.")
 
-# ================================
-# UI
-# ================================
-st.title("🩸 Blood Group Prediction from Fingerprint")
-st.write("Ensemble Model: SVM + KNN → Meta Classifier")
+# -----------------------------
+# Image Upload
+# -----------------------------
+uploaded_file = st.file_uploader("Upload Fingerprint Image", type=["jpg", "jpeg", "png"])
 
-uploaded = st.file_uploader(
-    "Upload Fingerprint Image",
-    type=["jpg", "png", "jpeg", "bmp"]
-)
+if uploaded_file is not None:
+    
+    # Open image using PIL (no OpenCV required)
+    image = Image.open(uploaded_file).convert("L")  # Convert to grayscale
+    
+    st.image(image, caption="Uploaded Fingerprint", use_column_width=True)
 
-if uploaded:
-    img_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
-    img = cv2.imdecode(img_bytes, cv2.IMREAD_GRAYSCALE)
+    # -----------------------------
+    # Preprocessing (MUST match training)
+    # -----------------------------
+    
+    IMAGE_SIZE = 128  # ⚠️ Change this if your model was trained with different size
 
-    st.image(img, caption="Original Fingerprint", use_column_width=True)
+    image = image.resize((IMAGE_SIZE, IMAGE_SIZE))
+    
+    image_array = np.array(image)
+    
+    # Normalize
+    image_array = image_array / 255.0
+    
+    # Flatten
+    features = image_array.flatten().reshape(1, -1)
 
-    processed = preprocess_image(img)
-    st.image(processed, caption="Processed Fingerprint", use_column_width=True)
+    # -----------------------------
+    # Feature Size Check
+    # -----------------------------
+    expected_features = svm_model.n_features_in_
 
-    if st.button("Predict Blood Group"):
+    if features.shape[1] != expected_features:
+        st.error(
+            f"Feature size mismatch!\n\n"
+            f"Model expects {expected_features} features.\n"
+            f"But received {features.shape[1]} features.\n\n"
+            f"Update IMAGE_SIZE to match training size."
+        )
+    else:
+        # -----------------------------
+        # Prediction
+        # -----------------------------
+        prediction = svm_model.predict(features)[0]
+        
+        if hasattr(svm_model, "predict_proba"):
+            probability = svm_model.predict_proba(features)[0]
+            
+            st.success(f"Predicted Blood Group: {prediction}")
+            st.write("Prediction Probabilities:")
+            
+            for label, prob in zip(svm_model.classes_, probability):
+                st.write(f"{label}: {prob:.4f}")
+        else:
+            st.success(f"Predicted Blood Group: {prediction}")
 
-        with st.spinner("Analyzing fingerprint..."):
-
-            # Extract HOG features
-            features = extract_features(processed)
-
-            # Base model probabilities
-            svm_prob = svm_model.predict_proba(features)
-            knn_prob = knn_model.predict_proba(features)
-
-            # Combine base outputs
-            stacked_features = np.concatenate(
-                (svm_prob, knn_prob),
-                axis=1
-            )
-
-            # Meta model prediction
-            final_prob = meta_model.predict_proba(stacked_features)
-            pred_class = np.argmax(final_prob)
-            confidence = np.max(final_prob) * 100
-
-            blood_group = label_encoder.inverse_transform([pred_class])[0]
-
-        st.success(f"🩸 Predicted Blood Group: **{blood_group}**")
-        st.metric("Prediction Confidence", f"{confidence:.2f}%")
-
-# ================================
-# FOOTER
-# ================================
+# -----------------------------
+# Footer
+# -----------------------------
 st.markdown("---")
-st.markdown("© 2026 Blood Group Prediction | Developed by Kishanjee")
+st.markdown("Developed using Streamlit & Machine Learning")
