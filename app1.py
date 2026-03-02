@@ -5,24 +5,16 @@ import streamlit as st
 import cv2
 import numpy as np
 import joblib
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+from skimage.feature import hog
 
 # ================================
 # PAGE CONFIG
 # ================================
 st.set_page_config(
-    page_title="Blood Group Prediction from Fingerprints",
+    page_title="Blood Group Prediction",
     page_icon="🩸",
     layout="centered"
 )
-
-# ================================
-# SESSION STATE
-# ================================
-if "page" not in st.session_state:
-    st.session_state.page = "home"
 
 # ================================
 # LOAD MODELS
@@ -40,83 +32,74 @@ svm_model, knn_model, meta_model, label_encoder = load_models()
 # ================================
 # IMAGE PREPROCESSING
 # ================================
-def enhance_fingerprint(img):
-    img = cv2.resize(img, (128,128))
-    img = cv2.GaussianBlur(img, (5,5), 0)
-    img = cv2.createCLAHE(2.0, (8,8)).apply(img)
-    img = img / 255.0
+def preprocess_image(img):
+    img = cv2.resize(img, (128, 128))
+    img = cv2.GaussianBlur(img, (5, 5), 0)
+    img = cv2.createCLAHE(2.0, (8, 8)).apply(img)
     return img
 
-# Convert image to flat features for ML models
+# ================================
+# HOG FEATURE EXTRACTION
+# ================================
 def extract_features(img):
-    return img.flatten().reshape(1, -1)
-
-# ================================
-# HOME PAGE
-# ================================
-if st.session_state.page == "home":
-
-    st.title("🩸 Blood Group Prediction")
-    st.write("Fingerprint-based Blood Group Prediction using Ensemble Machine Learning (SVM + KNN + Meta Model)")
-
-    st.markdown("## Model Architecture")
-    st.write("Base Models: SVM + KNN")
-    st.write("Final Model: Meta Classifier")
-
-    if st.button("🚀 Start Prediction"):
-        st.session_state.page = "predict"
-        st.rerun()
-
-# ================================
-# PREDICTION PAGE
-# ================================
-if st.session_state.page == "predict":
-
-    if st.button("⬅ Home"):
-        st.session_state.page = "home"
-        st.rerun()
-
-    uploaded = st.file_uploader(
-        "Upload Fingerprint Image",
-        type=["jpg","png","jpeg","bmp"]
+    features = hog(
+        img,
+        orientations=9,
+        pixels_per_cell=(8, 8),
+        cells_per_block=(2, 2),
+        block_norm='L2-Hys'
     )
+    return features.reshape(1, -1)
 
-    if uploaded:
-        img_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
-        img = cv2.imdecode(img_bytes, cv2.IMREAD_GRAYSCALE)
+# ================================
+# UI
+# ================================
+st.title("🩸 Blood Group Prediction from Fingerprint")
+st.write("Ensemble Model: SVM + KNN → Meta Classifier")
 
-        st.image(img, caption="Original Fingerprint", use_column_width=True)
+uploaded = st.file_uploader(
+    "Upload Fingerprint Image",
+    type=["jpg", "png", "jpeg", "bmp"]
+)
 
-        enhanced = enhance_fingerprint(img)
-        st.image(enhanced, caption="Enhanced Fingerprint", use_column_width=True)
+if uploaded:
+    img_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
+    img = cv2.imdecode(img_bytes, cv2.IMREAD_GRAYSCALE)
 
-        if st.button("Predict Blood Group"):
-            with st.spinner("Analyzing fingerprint..."):
+    st.image(img, caption="Original Fingerprint", use_column_width=True)
 
-                # Feature extraction
-                features = extract_features(enhanced)
+    processed = preprocess_image(img)
+    st.image(processed, caption="Processed Fingerprint", use_column_width=True)
 
-                # Base model probabilities
-                svm_prob = svm_model.predict_proba(features)
-                knn_prob = knn_model.predict_proba(features)
+    if st.button("Predict Blood Group"):
 
-                # Combine base outputs
-                final_features = np.concatenate((svm_prob, knn_prob), axis=1)
+        with st.spinner("Analyzing fingerprint..."):
 
-                # Meta model prediction
-                probs = meta_model.predict_proba(final_features)
-                pred_class = np.argmax(probs)
-                confidence = np.max(probs) * 100
-                blood_group = label_encoder.inverse_transform([pred_class])[0]
+            # Extract HOG features
+            features = extract_features(processed)
 
-            st.success(f"🩸 Predicted Blood Group: **{blood_group}**")
-            st.metric("Prediction Confidence", f"{confidence:.2f}%")
+            # Base model probabilities
+            svm_prob = svm_model.predict_proba(features)
+            knn_prob = knn_model.predict_proba(features)
+
+            # Combine base outputs
+            stacked_features = np.concatenate(
+                (svm_prob, knn_prob),
+                axis=1
+            )
+
+            # Meta model prediction
+            final_prob = meta_model.predict_proba(stacked_features)
+            pred_class = np.argmax(final_prob)
+            confidence = np.max(final_prob) * 100
+
+            blood_group = label_encoder.inverse_transform([pred_class])[0]
+
+        st.success(f"🩸 Predicted Blood Group: **{blood_group}**")
+        st.metric("Prediction Confidence", f"{confidence:.2f}%")
 
 # ================================
 # FOOTER
 # ================================
-st.markdown("""
----
-© 2026 Blood Group Prediction from Fingerprints  
-Developed by Kishanjee
-""")
+st.markdown("---")
+st.markdown("© 2026 Blood Group Prediction | Developed by Kishanjee")
